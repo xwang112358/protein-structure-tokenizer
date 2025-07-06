@@ -1,0 +1,50 @@
+# Configuration file for protein structure data preprocessing pipeline
+# This file contains all the parameters that can be customized for preprocessing
+
+# Graph construction parameters
+num_neighbor: 30                    # Number of nearest neighbors for k-NN graph construction
+                                    # -1 for fully connected graph
+
+# Sequence processing parameters  
+downsampling_ratio: 4               # Ratio for downsampling structure to sequence tokens
+residue_loc_is_alphac: true         # Whether to use alpha-carbon coordinates for residue location
+                                    # If false, uses centroid of all atoms
+padding_num_residue: 512            # Maximum number of residues after padding
+crop_index: 512                     # Maximum sequence length after random cropping
+noise_level: 0.0                    # Noise level for data augmentation (0.0 = no noise)
+
+# Quality filtering parameters
+min_number_valid_residues: 10       # Minimum number of residues with valid backbone coordinates
+max_number_residues: 1000           # Maximum number of residues allowed
+
+# Input processing parameters
+chain_id: null                      # Specific chain ID to process (null = all chains)
+                                    # Example: "A" to process only chain A
+
+# Output parameters
+save_intermediate: false            # Whether to save the raw ProteinStructureSample
+output_format: "npy"               # Output format: "npy" or "npz"
+
+# Advanced parameters (modify with caution)
+residue_embedding_dim: 21           # Dimension for amino acid one-hot encoding (20 AA + unknown)
+coordinate_noise_std: 0.0           # Standard deviation for coordinate noise injection
+
+# Example custom configurations for different use cases:
+
+# For small proteins (< 100 residues):
+# crop_index: 128
+# padding_num_residue: 128
+# num_neighbor: 20
+
+# For large proteins (> 500 residues):  
+# crop_index: 1024
+# padding_num_residue: 1024
+# num_neighbor: 50
+
+# For high-quality structures only:
+# min_number_valid_residues: 50
+# max_number_residues: 500
+
+# For data augmentation during training:
+# noise_level: 0.1
+# coordinate_noise_std: 0.05
