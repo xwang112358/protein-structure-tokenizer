@@ -1,0 +1,29 @@
+# PyTorch Geometric Data Pipeline Requirements
+# This file lists additional dependencies required for the PyG pipeline
+
+# Core PyTorch and PyG dependencies
+torch>=2.0.0
+torch-geometric>=2.3.0
+torch-scatter>=2.1.0
+torch-sparse>=0.6.0
+
+# Additional PyG utilities (optional but recommended)
+torch-cluster>=1.6.0
+torch-spline-conv>=1.2.0
+
+# For advanced features (optional)
+pyg-lib>=0.2.0  # Compiled PyG operations
+
+# Existing dependencies from the original pipeline
+# (These should already be installed, but listed for completeness)
+jax>=0.4.0
+jaxlib>=0.4.0
+numpy>=1.21.0
+scipy>=1.7.0
+PyYAML>=6.0
+pandas>=1.3.0
+
+# For visualization and analysis (optional)
+matplotlib>=3.5.0
+seaborn>=0.11.0
+networkx>=2.6.0

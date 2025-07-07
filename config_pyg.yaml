@@ -1,0 +1,46 @@
+# Configuration for PyTorch Geometric Data Pipeline
+# This extends the existing config with PyG-specific settings
+
+# Basic preprocessing parameters (same as original pipeline)
+num_neighbor: 30
+downsampling_ratio: 4
+residue_loc_is_alphac: true
+padding_num_residue: 512
+crop_index: 512
+noise_level: 0.0
+min_number_valid_residues: 10
+max_number_residues: 1000
+chain_id: null  # If null, processes all chains
+
+# PyG-specific configuration
+output_format: "pt"  # 'pt' (torch.save) or 'pkl' (pickle)
+include_global_features: true
+save_intermediate: false
+
+# PyTorch settings
+dtype: "float32"  # 'float32' or 'float64' 
+device: "cpu"     # 'cpu', 'cuda', 'cuda:0', etc.
+
+# Batch processing settings
+batch_size: 32
+max_proteins_per_batch: 64
+
+# Advanced settings
+edge_pruning:
+  enabled: false
+  max_distance: 20.0  # Angstroms
+  
+memory_optimization:
+  use_half_precision: false
+  gradient_checkpointing: false
+  
+# Validation settings
+validation:
+  check_graph_connectivity: true
+  verify_feature_integrity: true
+  
+# Output customization
+output:
+  save_metadata: true
+  compress_tensors: false
+  include_raw_coordinates: true
