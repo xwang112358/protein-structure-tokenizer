@@ -26,6 +26,7 @@ def process_pdb_batch(
     pdb_folder_path: str,
     save_individual: bool = False,
     save_batch: bool = False,
+    save_data_list: bool = False,
     output_dir: str = "batch_outputs",
     debug: bool = True,
     config_overrides: dict = None
@@ -113,6 +114,12 @@ def process_pdb_batch(
         
         # Extract individual data objects from the batch
         individual_data_list = batch_data.to_data_list()
+
+        if save_data_list:
+            data_list_filename = f"data_list_{os.path.basename(pdb_folder_path)}.pt"
+            data_list_path = os.path.join(output_dir, data_list_filename)
+            torch.save(individual_data_list, data_list_path)    
+            print(f"data list saved to: {data_list_path}")
         
         print("\nBatch Summary:")
         print(f"  Total proteins processed: {len(individual_data_list)}")
@@ -236,6 +243,11 @@ Examples:
         help="Save individual PyG data files"
     )
     parser.add_argument(
+        "--save_data_list",
+        action="store_true",
+        help="Save the list of individual PyG data objects"
+    )
+    parser.add_argument(
         "--save_batch", 
         action="store_true",
         help="Save the batch file"
@@ -281,6 +293,7 @@ Examples:
         data_list = process_pdb_batch(
             pdb_folder_path=args.pdb_folder,
             save_individual=args.save_individual,
+            save_data_list=args.save_data_list,
             save_batch=args.save_batch,
             output_dir=args.output_dir,
             debug=not args.quiet,

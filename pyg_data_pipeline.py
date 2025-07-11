@@ -128,22 +128,20 @@ class PyGDataPipeline:
 
         if not os.path.exists(pdb_file_path):
             error_msg = f"PDB file not found: {pdb_file_path}"
-            debug_print(f"ERROR: {error_msg}", "LOAD")
             raise FileNotFoundError(error_msg)
 
         try:
-            debug_print("Reading PDB file content...", "LOAD", 1)
             with open(pdb_file_path, "r") as f:
                 pdb_string = f.read()
 
-            debug_print(f"PDB content length: {len(pdb_string)} characters", "LOAD", 1)
-            debug_print(f"Processing chain_id: {chain_id or self.config['chain_id'] or 'ALL'}", "LOAD", 1)
+            # debug_print(f"PDB content length: {len(pdb_string)} characters", "LOAD", 1)
+            # debug_print(f"Processing chain_id: {chain_id or self.config['chain_id'] or 'ALL'}", "LOAD", 1)
             
             sample = protein_structure_from_pdb_string(
                 pdb_str=pdb_string, chain_id=chain_id or self.config["chain_id"]
             )
 
-            debug_print(f"Successfully loaded protein with {sample.nb_residues} residues", "LOAD", 1)
+            # debug_print(f"Successfully loaded protein with {sample.nb_residues} residues", "LOAD", 1)
             return sample
 
         except Exception as e:
@@ -152,60 +150,6 @@ class PyGDataPipeline:
             debug_print(f"Exception type: {type(e).__name__}", "LOAD", 1)
             raise Exception(error_msg) from e
 
-    def load_from_pdb_string(
-        self, pdb_string: str, chain_id: Optional[str] = None
-    ) -> ProteinStructureSample:
-        """
-        Load protein structure from a PDB string.
-
-        Args:
-            pdb_string: PDB format string
-            chain_id: Specific chain ID to extract (if None, processes all chains)
-
-        Returns:
-            ProteinStructureSample object
-        """
-        debug_print("Loading protein from PDB string", "LOAD")
-        debug_print(f"PDB string length: {len(pdb_string)} characters", "LOAD", 1)
-
-        try:
-            debug_print(f"Processing chain_id: {chain_id or self.config['chain_id'] or 'ALL'}", "LOAD", 1)
-            
-            sample = protein_structure_from_pdb_string(
-                pdb_str=pdb_string, chain_id=chain_id or self.config["chain_id"]
-            )
-
-            debug_print(f"Successfully loaded protein with {sample.nb_residues} residues", "LOAD", 1)
-            return sample
-
-        except Exception as e:
-            error_msg = f"Failed to parse PDB string: {str(e)}"
-            debug_print(f"ERROR: {error_msg}", "LOAD")
-            debug_print(f"Exception type: {type(e).__name__}", "LOAD", 1)
-            raise Exception(error_msg) from e
-
-    def load_from_npy_file(self, npy_file_path: str) -> ProteinStructureSample:
-        """
-        Load protein structure from a saved numpy file.
-
-        Args:
-            npy_file_path: Path to the .npy file containing ProteinStructureSample data
-
-        Returns:
-            ProteinStructureSample object
-        """
-        debug_print(f"Loading protein from NPY file: {npy_file_path}", "LOAD")
-
-        try:
-            sample = ProteinStructureSample.from_file(npy_file_path)
-            debug_print(f"Successfully loaded protein with {sample.nb_residues} residues", "LOAD", 1)
-            return sample
-
-        except Exception as e:
-            error_msg = f"Failed to load .npy file {npy_file_path}: {str(e)}"
-            debug_print(f"ERROR: {error_msg}", "LOAD")
-            debug_print(f"Exception type: {type(e).__name__}", "LOAD", 1)
-            raise Exception(error_msg) from e
 
     def validate_sample(self, sample: ProteinStructureSample) -> bool:
         """
@@ -218,10 +162,6 @@ class PyGDataPipeline:
             True if sample is valid, False otherwise
         """
         debug_print("Validating protein sample", "VALIDATE")
-        
-        debug_print(f"Total residues: {sample.nb_residues}", "VALIDATE", 1)
-        debug_print(f"Min required: {self.config['min_number_valid_residues']}", "VALIDATE", 1)
-        debug_print(f"Max allowed: {self.config['max_number_residues']}", "VALIDATE", 1)
         
         should_filter = filter_out_sample(
             sample=sample,
@@ -238,8 +178,80 @@ class PyGDataPipeline:
             debug_print(f"  Total residues: {sample.nb_residues}", "VALIDATE", 2)
             return False
 
-        debug_print("Sample passed validation ✓", "VALIDATE", 1)
         return True
+
+    def _get_esm3_data(self,
+                       sample: ProteinStructureSample,
+                       add_batch_dim: bool = True) -> Dict[str, np.ndarray]:
+        """
+        Convert ProteinStructureSample to ESM3-compatible format.
+        
+        Args:
+            sample: Protein structure sample
+            add_batch_dim: Whether to add batch dimension to outputs (default: True)
+            
+        Returns:
+            Dictionary with ESM3-compatible tensors:
+                - coords: (B, L, 3, 3) 3D coordinates of N, CA, C atoms
+                - attention_mask: (B, L) Valid residue mask
+                - sequence_id: (B, L) Sequence identifiers
+                - residue_index: (B, L) Residue position indices
+        """
+        debug_print("Extracting ESM3 data from protein sample", "ESM3")
+        
+        # Get mask for residues with missing backbone atoms
+        missing_coords_residue_mask = sample.get_missing_backbone_coords_mask()  # Shape: (L,)
+        num_residues_with_coords = np.sum(~missing_coords_residue_mask)
+        
+        debug_print(f"Initial residues with coordinates: {num_residues_with_coords}", "ESM3", 1)
+
+        # Get indices of backbone atoms
+        (n_index, ca_index, c_index) = [
+            residue_constants.atom_order[a] for a in ("N", "CA", "C")
+        ]
+
+        # Extract backbone atom coordinates
+        n_xyz = sample.atom37_positions[:, n_index, :]   # Shape: (L, 3)
+        ca_xyz = sample.atom37_positions[:, ca_index, :]  # Shape: (L, 3)
+        c_xyz = sample.atom37_positions[:, c_index, :]   # Shape: (L, 3)
+
+        # Stack coordinates to get (L, 3, 3) - for each residue, coords of N, CA, C atoms
+        coords = np.stack([n_xyz, ca_xyz, c_xyz], axis=1)  # Shape: (L, 3, 3)
+        
+        # Create attention mask (1 = valid residue, 0 = invalid/missing residue)
+        attention_mask = ~missing_coords_residue_mask  # Shape: (L,)
+        
+        # Create sequence IDs (using amino acid types)
+        if hasattr(sample, 'aatype') and sample.aatype is not None:
+            if len(sample.aatype.shape) == 2:
+                # One-hot encoded amino acids - convert to indices
+                sequence_id = np.argmax(sample.aatype, axis=-1)  # Shape: (L,)
+            else:
+                # Already indices
+                sequence_id = sample.aatype  # Shape: (L,)
+        else:
+            # Fallback: use placeholder values
+            sequence_id = np.zeros(len(missing_coords_residue_mask), dtype=np.int32)
+        
+        # Create residue indices (sequential positions)
+        residue_index = np.arange(len(missing_coords_residue_mask), dtype=np.int32)  # Shape: (L,)
+        
+        # Add batch dimension if requested (B=1 for single protein)
+        if add_batch_dim:
+            coords = coords[np.newaxis, ...]           # Shape: (1, L, 3, 3)
+            attention_mask = attention_mask[np.newaxis, ...]  # Shape: (1, L)
+            sequence_id = sequence_id[np.newaxis, ...]      # Shape: (1, L)
+            residue_index = residue_index[np.newaxis, ...]   # Shape: (1, L)
+        
+        # Package results
+        debug_print(f"ESM3 data extracted - coords shape: {coords.shape}", "ESM3", 1)
+        return {
+            "coords": coords,                  # Shape: (B, L, 3, 3) or (L, 3, 3)
+            "attention_mask": attention_mask,  # Shape: (B, L) or (L,)
+            "sequence_id": sequence_id,        # Shape: (B, L) or (L,)
+            "residue_index": residue_index     # Shape: (B, L) or (L,)
+        }
+    
 
     def _compute_pyg_graph(
         self,
@@ -421,9 +433,8 @@ class PyGDataPipeline:
             debug_print(f"JAX array shapes - aatype: {aatype.shape if hasattr(aatype, 'shape') else 'no shape'}, type: {type(aatype)}", "PREPROCESS", 2)
             debug_print(f"nodes_x: {nodes_x.shape if hasattr(nodes_x, 'shape') else 'no shape'}, type: {type(nodes_x)}", "PREPROCESS", 2)
 
-            # Node features and positions
+            # Node features
             x = torch.tensor(np.array(nodes_x), dtype=dtype, device=device)  # [num_nodes, 3]
-            pos = torch.tensor(np.array(nodes_x), dtype=dtype, device=device)  # [num_nodes, 3]
             
             # Edge connectivity in PyG format [2, num_edges]
             edge_index = torch.stack([
@@ -452,10 +463,6 @@ class PyGDataPipeline:
             
             # Node mask (indicating real vs padded nodes)
             node_mask = torch.ones(n_node, dtype=torch.bool, device=device)
-            
-            # Token mask for downsampling
-            token_num = int(n_node / graph_data["downsampling_ratio"])
-            tokens_mask = torch.ones(token_num, dtype=torch.bool, device=device)
 
             debug_print(f"Tensor shapes - x: {x.shape}, edge_index: {edge_index.shape}, edge_attr: {edge_attr.shape}", "PREPROCESS", 2)
 
@@ -466,12 +473,10 @@ class PyGDataPipeline:
                 x=x,  # Node features (coordinates)
                 edge_index=edge_index,  # Edge connectivity [2, num_edges]
                 edge_attr=edge_attr,  # Edge features
-                pos=pos,  # Node positions (same as x for now)
                 
                 # Sequence and mask information
                 sequence=sequence,  # Amino acid types [num_nodes]
                 node_mask=node_mask,  # Valid node indicator [num_nodes]
-                tokens_mask=tokens_mask,  # Token mask for downsampling
                 
                 # Graph metadata
                 num_nodes=n_node,
@@ -529,8 +534,6 @@ class PyGDataPipeline:
         self,
         data: Data,
         output_path: str,
-        save_raw_sample: bool = False,
-        raw_sample: Optional[ProteinStructureSample] = None,
     ):
         """
         Save the PyG data to file.
@@ -552,36 +555,19 @@ class PyGDataPipeline:
         try:
             debug_print(f"Output format: {self.config['output_format']}", "SAVE", 1)
             
-            if self.config["output_format"] == "pkl":
-                # Save as pickle file
-                with open(output_path, "wb") as f:
-                    pickle.dump(data, f)
-            else:  # Default to .pt format
-                torch.save(data, output_path)
-
+            torch.save(data, output_path)
             file_size = os.path.getsize(output_path) / (1024 * 1024)  # MB
             debug_print(f"Successfully saved PyG data ({file_size:.2f} MB) ✓", "SAVE", 1)
 
-            # Save raw sample if requested
-            if save_raw_sample and raw_sample is not None:
-                raw_output_path = output_path.replace(".pt", "_raw.npy").replace(
-                    ".pkl", "_raw.npy"
-                )
-                debug_print(f"Saving raw sample to: {raw_output_path}", "SAVE", 1)
-                raw_sample.to_file(raw_output_path)
-                debug_print("Raw sample saved ✓", "SAVE", 2)
-
         except Exception as e:
             error_msg = f"Failed to save PyG data to {output_path}: {str(e)}"
-            debug_print(f"ERROR: {error_msg}", "SAVE")
-            debug_print(f"Exception type: {type(e).__name__}", "SAVE", 1)
             raise Exception(error_msg) from e
+
 
     def process_single(
         self,
         input_source: Union[str, ProteinStructureSample],
         output_path: Optional[str] = None,
-        input_type: str = "auto",
     ) -> Data:
         """
         Process a single protein input through the complete PyG pipeline.
@@ -589,56 +575,27 @@ class PyGDataPipeline:
         Args:
             input_source: Path to PDB file, PDB string, path to .npy file, or ProteinStructureSample
             output_path: Path to save the processed output (optional)
-            input_type: Type of input ('pdb_file', 'pdb_string', 'npy_file', 'sample', or 'auto')
 
         Returns:
             PyTorch Geometric Data object
         """
-        debug_print("=== Starting PyG pipeline for single protein ===", "PIPELINE")
-
         # Load the sample based on input type
-        debug_print(f"Input type: {input_type}", "PIPELINE", 1)
-        
         if isinstance(input_source, ProteinStructureSample):
-            debug_print("Using provided ProteinStructureSample", "PIPELINE", 1)
             sample = input_source
-        elif input_type == "auto":
-            debug_print("Auto-detecting input type...", "PIPELINE", 1)
-            if os.path.exists(str(input_source)):
-                if str(input_source).endswith(".npy"):
-                    debug_print("Detected: NPY file", "PIPELINE", 2)
-                    sample = self.load_from_npy_file(str(input_source))
-                else:
-                    debug_print("Detected: PDB file", "PIPELINE", 2)
-                    sample = self.load_from_pdb_file(str(input_source))
-            else:
-                debug_print("Detected: PDB string", "PIPELINE", 2)
-                sample = self.load_from_pdb_string(str(input_source))
-        elif input_type == "pdb_file":
+        elif os.path.exists(str(input_source)):
             sample = self.load_from_pdb_file(str(input_source))
-        elif input_type == "pdb_string":
-            sample = self.load_from_pdb_string(str(input_source))
-        elif input_type == "npy_file":
-            sample = self.load_from_npy_file(str(input_source))
         else:
-            error_msg = f"Unknown input_type: {input_type}"
-            debug_print(f"ERROR: {error_msg}", "PIPELINE")
-            raise ValueError(error_msg)
+            raise ValueError(f"Invalid input_source: {input_source}")
 
         # Validate the sample
-        debug_print("Validating sample...", "PIPELINE", 1)
         if not self.validate_sample(sample):
-            error_msg = "Sample failed validation - does not meet filtering criteria"
-            debug_print(f"ERROR: {error_msg}", "PIPELINE")
-            raise ValueError(error_msg)
+            raise ValueError("Sample failed validation - does not meet filtering criteria")
 
         # Preprocess to PyG format
-        debug_print("Starting preprocessing...", "PIPELINE", 1)
         pyg_data = self.preprocess_to_pyg(sample)
 
         # Save the output if path is provided
         if output_path:
-            debug_print("Saving output...", "PIPELINE", 1)
             self.save_pyg_data(
                 pyg_data,
                 output_path,
@@ -646,9 +603,9 @@ class PyGDataPipeline:
                 raw_sample=sample,
             )
 
-        debug_print("=== PyG pipeline completed successfully ===", "PIPELINE")
         return pyg_data
 
+    
     def process_batch(
         self,
         input_sources: List[Union[str, ProteinStructureSample]],
@@ -713,6 +670,38 @@ class PyGDataPipeline:
 
         return batch
 
+    def get_esm3_data_for_protein(self, 
+                                  input_source: Union[str, ProteinStructureSample],
+                                  as_tensors: bool = True) -> Dict[str, Union[np.ndarray, torch.Tensor]]:
+        """
+        Convenience method to get ESM3-compatible data for a protein.
+        
+        Args:
+            input_source: Path to PDB file or ProteinStructureSample object
+            as_tensors: Whether to return PyTorch tensors (True) or numpy arrays (False)
+            
+        Returns:
+            Dictionary with ESM3-compatible data
+        """
+        # Load the protein if needed
+        if isinstance(input_source, ProteinStructureSample):
+            sample = input_source
+        else:
+            sample = self.load_from_pdb_file(str(input_source))
+            
+        # Validate the sample
+        if not self.validate_sample(sample):
+            raise ValueError("Sample failed validation - does not meet filtering criteria")
+        
+        # Get ESM3 data
+        esm3_data = self._get_esm3_data(sample, add_batch_dim=True)
+        
+        # Convert to tensors if requested
+        if as_tensors:
+            return self.convert_esm3_data_to_tensors(esm3_data)
+        
+        return esm3_data
+
     def get_sample_info(self, sample: ProteinStructureSample) -> Dict[str, Any]:
         """
         Get information about the protein sample.
@@ -743,6 +732,35 @@ class PyGDataPipeline:
         debug_print(f"Sample info extracted: {len(info)} fields", "INFO", 1)
         return info
 
+    def convert_esm3_data_to_tensors(self, esm3_data: Dict[str, np.ndarray], device: str = None) -> Dict[str, torch.Tensor]:
+        """
+        Convert ESM3 format numpy arrays to PyTorch tensors.
+        
+        Args:
+            esm3_data: Dictionary with ESM3 data from _get_esm3_data
+            device: PyTorch device to place tensors on (default: self.config["device"])
+            
+        Returns:
+            Dictionary with the same keys but values converted to PyTorch tensors
+        """
+        if device is None:
+            device = self.config["device"]
+        
+        result = {}
+        for key, value in esm3_data.items():
+            if key == "sequence_id":
+                # Sequence IDs are typically integer indices
+                result[key] = torch.tensor(value, dtype=torch.long, device=device)
+            elif key == "attention_mask":
+                # Attention mask is boolean
+                result[key] = torch.tensor(value, dtype=torch.bool, device=device)
+            else:
+                # All other tensors (coords, residue_index) as float
+                result[key] = torch.tensor(value, dtype=self.config["dtype"], device=device)
+        
+        return result
+    
+
 
 def convert_batch_data_to_pyg(
     batch_data_vq3d: BatchDataVQ3D, 
@@ -771,7 +789,6 @@ def convert_batch_data_to_pyg(
     
     # Convert core graph data
     x = torch.tensor(np.array(graph.node_features), dtype=dtype, device=device)
-    pos = torch.tensor(np.array(graph.nodes_original_coordinates), dtype=dtype, device=device)
     
     # Edge connectivity in PyG format
     edge_index = torch.stack([
@@ -781,25 +798,35 @@ def convert_batch_data_to_pyg(
     
     edge_attr = torch.tensor(np.array(graph.edge_features), dtype=dtype, device=device)
     
-    # Masks
+    # Node mask
     node_mask = torch.tensor(
         np.array(graph.nodes_mask).squeeze(), dtype=torch.bool, device=device
     )
-    tokens_mask = torch.tensor(
-        np.array(graph.tokens_mask).squeeze(), dtype=torch.bool, device=device
-    )
+    
+    # Extract sequence information from features if available
+    sequence = None
+    if 'aatype' in features:
+        aatype_data = features['aatype']
+        if isinstance(aatype_data, (np.ndarray, jnp.ndarray)):
+            aatype_np = np.array(aatype_data)
+            if aatype_np.ndim == 2:  # One-hot encoded
+                sequence = torch.tensor(np.argmax(aatype_np, axis=-1), dtype=torch.long, device=device)
+            else:  # Already indices
+                sequence = torch.tensor(aatype_np, dtype=torch.long, device=device)
     
     # Create Data object
     pyg_data = Data(
         x=x,
         edge_index=edge_index,
         edge_attr=edge_attr,
-        pos=pos,
         node_mask=node_mask,
-        tokens_mask=tokens_mask,
         num_nodes=int(graph.n_node.item()),
         num_edges=int(graph.n_edge.item()),
     )
+    
+    # Add sequence if available
+    if sequence is not None:
+        pyg_data.sequence = sequence
     
     # Add protein features
     protein_features = {}
